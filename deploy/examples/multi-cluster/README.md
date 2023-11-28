@@ -1,114 +1,115 @@
-1. Export locations of kubeconfig files and create aliases:
-```shell
-export KUBECONFIG_WEST=
-```
-```shell
-export KUBECONFIG_EAST=
-```
-```shell
-# this is an output directory for kubeconfig files created for istiod to watch remote kube API server
-export KUBECONFIG_LOCATION=
-```
-```shell
-alias oc-west="KUBECONFIG=$KUBECONFIG_WEST oc"
-alias oc-east="KUBECONFIG=$KUBECONFIG_EAST oc"
+# RHOSSM: Istio Multicluster-Multiprimary (vSphere with MetalLB)
+
+The same cluster domain is used in both clusters.
+
+## Prerequisites
+- The same root of trust must be used in this use case. For this, follow the Istio [guide](https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/).
+- MetalLB installed.
+
+## Installing Istio Multicluster/Multiprimary
+Create OCP project:
+```bash
+oc new-project istio-system
 ```
 
-2. Create cacerts secrets:
-```shell
-oc-west create namespace istio-system
-oc-west label namespace istio-system topology.istio.io/network=network1
-oc-west create secret generic cacerts -n istio-system \
+- Cluster1
+```bash
+oc label namespace istio-system topology.istio.io/network=cluster1-network
+```
+
+- Cluster2
+```bash
+oc label namespace istio-system topology.istio.io/network=cluster2-network
+```
+
+Create CA and certificates.Open a new terminal, clone the Istio [repository](https://github.com/istio/istio) and go to _istio_ folder (new cloned repo). The steps must be executed from _istio_ folder.
+```bash
+mkdir certs
+pushd certs
+make -f ../tools/certs/Makefile.selfsigned.mk root-ca
+make -f ../tools/certs/Makefile.selfsigned.mk cluster1-cacerts
+make -f ../tools/certs/Makefile.selfsigned.mk cluster2-cacerts
+```
+
+Create the Istio secret in both clusters:
+
+- Cluster1
+```bash
+oc create secret generic cacerts -n istio-system \
       --from-file=cluster1/ca-cert.pem \
       --from-file=cluster1/ca-key.pem \
       --from-file=cluster1/root-cert.pem \
       --from-file=cluster1/cert-chain.pem
-oc-east create namespace istio-system
-oc-east label namespace istio-system topology.istio.io/network=network2
-oc-east create secret generic cacerts -n istio-system \
+```
+
+- Cluster2
+```bash
+oc create secret generic cacerts -n istio-system \
       --from-file=cluster2/ca-cert.pem \
       --from-file=cluster2/ca-key.pem \
       --from-file=cluster2/root-cert.pem \
       --from-file=cluster2/cert-chain.pem
 ```
 
-3. Deploy SMCP (TODO: Disable federation controllers):
-```shell
-sed "s/{{clusterNamePrefix}}/west/g" smcp.tmpl.yaml | oc-west apply -n istio-system -f -
-sed "s/{{clusterNamePrefix}}/east/g" smcp.tmpl.yaml | oc-east apply -n istio-system -f -
+```bash
+popd
 ```
 
-4. Create auto passthrough gateway for east-west gateway:
-```shell
-sed "s/{{clusterNamePrefix}}/west/g" istio-eastwestgateway.yaml | oc-west apply -n istio-system -f -
-sed "s/{{clusterNamePrefix}}/east/g" istio-eastwestgateway.yaml | oc-east apply -n istio-system -f -
+Deploy the SMCP resource in both clusters:
+
+- Cluster1
+```bash
+oc apply -f cluster1/smcp.yaml
 ```
 
-5. Generate kubeconfigs for remote clusters:
-```shell
+- Cluster2
+```bash
+oc apply -f cluster2/smcp.yaml
+```
+
+Deploy the dedicated gateways for east-west traffic:
+
+- Cluster1
+```bash
+oc apply -f cluster1/istio-eastwestgateway.yaml
+```
+
+- Cluster2
+```bash
+oc apply -f cluster2/istio-eastwestgateway.yaml
+```
+
+Generate kubeconfigs for remote clusters:
+
+- Cluster1
+```bash
 ./generate-kubeconfig.sh \
-  --cluster-name=west \
+  --cluster-name=cluster1 \
   --namespace=istio-system \
   --revision=basic \
-  --remote-kubeconfig-path=$KUBECONFIG_WEST > $KUBECONFIG_LOCATION/istiod-basic-west-cluster.kubeconfig
+  --remote-kubeconfig-path=<KUBECONFIG-cluster1> > cluster2/remote-secret.yaml
+```
+- Cluster2
+```bash
 ./generate-kubeconfig.sh \
-  --cluster-name=east \
+  --cluster-name=cluster2 \
   --namespace=istio-system \
   --revision=basic \
-  --remote-kubeconfig-path=$KUBECONFIG_EAST > $KUBECONFIG_LOCATION/istiod-basic-east-cluster.kubeconfig
+  --remote-kubeconfig-path=<KUBECONFIG-cluster2> > cluster1/remote-secret.yaml
 ```
 
-6. Create secrets from generated kubeconfig:
-```shell
-oc-west create secret generic istio-remote-secret-east-cluster \
-  -n istio-system \
-  --from-file=east-cluster=$KUBECONFIG_LOCATION/istiod-basic-east-cluster.kubeconfig \
-  --type=string
-oc-west annotate secret istio-remote-secret-east-cluster -n istio-system networking.istio.io/cluster='east-cluster'
-oc-west label secret istio-remote-secret-east-cluster -n istio-system istio/multiCluster='true'
+Create secrets from generated kubeconfig:
 
-oc-east create secret generic istio-remote-secret-west-cluster \
-  -n istio-system \
-  --from-file=west-cluster=$KUBECONFIG_LOCATION/istiod-basic-west-cluster.kubeconfig \
-  --type=string
-oc-east annotate secret istio-remote-secret-west-cluster -n istio-system networking.istio.io/cluster='west-cluster'
-oc-east label secret istio-remote-secret-west-cluster -n istio-system istio/multiCluster='true'
+- Cluster1
+```bash
+oc create secret generic istio-remote-secret-cluster2-cluster -n istio-system --from-file=./cluster1/remote-secret.yaml --type=string
+oc annotate secret istio-remote-secret-cluster2-cluster -n istio-system networking.istio.io/cluster='cluster2-cluster'
+oc label secret istio-remote-secret-cluster2-cluster -n istio-system istio/multiCluster='true'
 ```
 
-7. Deploy bookinfo on west cluster and sleep on east cluster:
-```shell
-oc-west new-project bookinfo
-oc-west label namespace bookinfo istio-injection=enabled
-oc-west apply -f https://raw.githubusercontent.com/maistra/istio/maistra-2.4/samples/bookinfo/platform/kube/bookinfo.yaml -n bookinfo
-oc-east new-project sleep
-oc-east label namespace sleep istio-injection=enabled
-oc-east apply -f https://raw.githubusercontent.com/maistra/istio/maistra-2.4/samples/sleep/sleep.yaml -n sleep
+- Cluster2
+```bash
+oc create secret generic istio-remote-secret-cluster1-cluster -n istio-system --from-file=./cluster2/remote-secret.yaml --type=string
+oc annotate secret istio-remote-secret-cluster1-cluster -n istio-system networking.istio.io/cluster='cluster1-cluster'
+oc label secret istio-remote-secret-cluster1-cluster -n istio-system istio/multiCluster='true'
 ```
-
-8. Update mesh networks:
-```shell
-# On AWS
-WEST_HOSTNAME=$(oc-west get services istio-eastwestgateway -n istio-system -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-# On GCP and Azure (and IBM?)
-WEST_HOSTNAME=$(oc-west get services istio-eastwestgateway -n istio-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-sed -e "s/{{clusterNamePrefix}}/east/g" \
-  -e "s/remote-network/west-network/" \
-  -e "s/remote-cluster/west-cluster/" \
-  -e "s/remote-gateway/$WEST_HOSTNAME/" smcp.tmpl.yaml | oc-east apply -n istio-system -f -
-```
-
-9. Test connectivity between services:
-```shell
-istioctl --kubeconfig=$KUBECONFIG_EAST pc endpoints $(oc-east get pods -n sleep -l app=sleep -o jsonpath='{.items[].metadata.name}') -n sleep
-oc-east exec $(oc-east get pods -l app=sleep -n sleep -o jsonpath='{.items[].metadata.name}') -n sleep -c sleep -- \
-  curl -v "productpage.bookinfo:9080/productpage"
-```
-
-#### Identified issues:
-1. Istio Operator does not create service account `istio-reader-service-account` that should be used by remote cluster.
-2. Ingress and egress gateways cannot be disabled when `spec.multi-cluster` is specified.
-3. Istiod does not discover east-west gateway when `cluster.multiCluster.meshNetworks` is not specified.
-4. TODO: Check if disabling federation will fix issue 3.
-5. TODO: Try to create `meshNetworks` in a config map.
-6. TODO: Enable Kiali.
-7. TODO: Investigate why `registryServiceName` does not work.

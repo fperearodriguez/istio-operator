@@ -1,0 +1,51 @@
+apiVersion: maistra.io/v2
+kind: ServiceMeshControlPlane
+metadata:
+  name: basic
+spec:
+  addons:
+    grafana:
+      enabled: false
+    kiali:
+      enabled: false
+    prometheus:
+      enabled: false
+  cluster:
+    name: cluster1-cluster
+    network: cluster1-network
+    multiCluster:
+      enabled: true
+      meshNetworks:
+        cluster1-network:
+          endpoints:
+          - fromRegistry: cluster1-cluster
+          gateways:
+          - address: 192.168.49.200
+            port: 15443
+  gateways:
+    openshiftRoute:
+      enabled: false
+  general:
+    logging:
+      componentLevels:
+        default: info
+  mode: ClusterWide
+  meshConfig:
+    discoverySelectors:
+    - matchLabels:
+        istio-injection: enabled
+  proxy:
+    accessLogging:
+      file:
+        name: /dev/stdout
+  security:
+    dataPlane:
+      mtls: true
+    identity:
+      type: ThirdParty
+    manageNetworkPolicy: false
+  techPreview:
+    global:
+      meshID: mesh1
+  tracing:
+    type: None
