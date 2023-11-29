@@ -16,9 +16,9 @@ spec:
     multiCluster:
       enabled: true
       meshNetworks:
-        cluster1-network:
+        cluster2-network:
           endpoints:
-          - fromRegistry: cluster1-cluster
+          - fromRegistry: cluster2-cluster
           gateways:
           - address: 192.168.49.200
             port: 15443

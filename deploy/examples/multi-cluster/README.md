@@ -113,3 +113,37 @@ oc create secret generic istio-remote-secret-cluster1-cluster -n istio-system --
 oc annotate secret istio-remote-secret-cluster1-cluster -n istio-system networking.istio.io/cluster='cluster1-cluster'
 oc label secret istio-remote-secret-cluster1-cluster -n istio-system istio/multiCluster='true'
 ```
+
+## Deploying sample applications
+Create the _my-awesome-project_ OCP project:
+```bash
+oc new-project my-awesome-project
+oc new-project sleep
+```
+
+Since we are using [Automatic Sidecar Injection](https://istio.io/latest/docs/setup/additional-setup/sidecar-injection/#automatic-sidecar-injection), label the _my-awesome-project_ OCP project:
+
+```bash
+oc label namespace my-awesome-project istio-injection=enabled
+oc label namespace sleep istio-injection=enabled
+```
+
+Deploy applications:
+```bash
+oc apply -f apps/
+oc apply -f https://raw.githubusercontent.com/maistra/istio/maistra-2.4/samples/sleep/sleep.yaml -n sleep
+```
+
+Test communication between services and meshes:
+```bash
+oc exec $SLEEP_POD -- -- curl -sS helloworld.my-awesome-project:5000/hello
+```
+
+Check the discovered endpoints for the _helloworld.my-awesome-project_ service:
+```bash
+istioctl pc endpoints $SLEEP_POD --cluster "outbound|5000||helloworld.my-awesome-project.svc.cluster.local" 
+
+ENDPOINT                 STATUS      OUTLIER CHECK     CLUSTER
+10.128.2.214:5000        HEALTHY     OK                outbound|5000||helloworld.my-awesome-project.svc.cluster.local
+192.168.49.200:15443     HEALTHY     OK                outbound|5000||helloworld.my-awesome-project.svc.cluster.local
+```
